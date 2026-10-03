@@ -1,0 +1,31 @@
+# Local database files. The schema is created by migrations at boot, so the
+# database itself is never committed.
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Go build output
+backend/bin/
+backend/itsm
+
+# Node
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+
+# Local environment overrides. The defaults in internal/config are enough to
+# run the stack; a .env is for pointing it somewhere else.
+.env
+.env.local
+
+# Editor and OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*
