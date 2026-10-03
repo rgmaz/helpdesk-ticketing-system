@@ -51,10 +51,18 @@ bootstrap administrator to the same documented password. Every demo account uses
 | `robin.ashby`   | Requester     | Only their own tickets                      |
 | `morgan.deluca` | Requester     | Only their own tickets                      |
 
-The sign-in screen only offers these credentials when the server was started with
-`-demo`; it learns this from `GET /meta`, which publishes a boolean and never the
-password itself. Without `-demo` the administrator gets a random password, logged
-once at startup and never stored in configuration.
+The sign-in screen offers these as one-click shortcuts, and only when the server
+was started with `-demo`. It learns both from `GET /meta`: a `demo` boolean and a
+`demo_accounts` array of the usernames the seeder created. The client keeps no
+copy of the list, so a shortcut on the login page cannot name an account that
+does not exist. The password stays in the client source rather than in the `/meta`
+response, because `/meta` is public and serving a credential from an
+unauthenticated endpoint is a footgun even for a development-only value.
+
+`demo_accounts` omits the administrator when `ITSM_ADMIN_PASSWORD` is set, since
+that account is then not on the demo password. Without `-demo` the administrator
+gets a random password, logged once at startup and never stored in
+configuration.
 
 The flag is a development convenience and it is guarded: the seeder refuses to run
 when tickets already exist, so pointing it at a real database creates nothing.

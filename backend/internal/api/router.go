@@ -2,14 +2,38 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/ryan/ticketing-system/backend/internal/auth"
 	"github.com/ryan/ticketing-system/backend/internal/config"
 	"github.com/ryan/ticketing-system/backend/internal/httpx"
+	"github.com/ryan/ticketing-system/backend/internal/models"
 	"github.com/ryan/ticketing-system/backend/internal/notify"
 	"github.com/ryan/ticketing-system/backend/internal/service"
 	"github.com/ryan/ticketing-system/backend/internal/store"
 )
+
+// demoAccountsFor lists the accounts reachable with the documented demo
+// password.
+//
+// The administrator is included only when it really does use that password: a
+// deployment that set ITSM_ADMIN_PASSWORD, or that ran without -demo and got a
+// generated one, would otherwise be advertised with a credential that cannot
+// sign in.
+func demoAccountsFor(cfg *config.Config) []service.DemoAccount {
+	accounts := service.DemoAccountList(cfg.DemoData)
+	if !cfg.DemoData || cfg.AdminPassword != "" {
+		return accounts
+	}
+	// Admin first: it is the account a reviewer wants most, and it is the only
+	// one that reaches the admin dashboard.
+	admin := service.DemoAccount{
+		Username: strings.ToLower(cfg.AdminUsername),
+		FullName: "Service Desk Administrator",
+		Role:     string(models.RoleAdmin),
+	}
+	return append([]service.DemoAccount{admin}, accounts...)
+}
 
 // Server holds the dependencies every handler needs.
 type Server struct {

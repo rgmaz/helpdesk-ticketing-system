@@ -309,7 +309,20 @@ export interface Meta {
    * unauthenticated endpoint would be a footgun even for a fixed dev value.
    */
   demo: boolean
+  /**
+   * The usernames the demo seeder created, for the sign-in shortcuts. Sourced
+   * from the seeder rather than hardcoded in this client, so a chip can never
+   * name an account that does not exist. Empty when `demo` is false.
+   */
+  demo_accounts: DemoAccount[]
   sla: { unit: string; scan_interval: string; warn_before: string }
+}
+
+/** One seeded account published by GET /meta. */
+export interface DemoAccount {
+  username: string
+  full_name: string
+  role: string
 }
 
 /** Query parameters accepted by GET /tickets and GET /tickets/search. */

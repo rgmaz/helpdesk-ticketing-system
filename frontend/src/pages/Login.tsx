@@ -181,28 +181,60 @@ export function LoginPage() {
  * Demo credentials, offered only when the backend reports it was started with
  * -demo. These accounts do not exist in a normal deployment, and a sign-in
  * button that cannot work is worse than no sign-in button.
+ *
+ * The usernames come from /meta, which reads the same roster the seeder used to
+ * create them. A list written out here used to sit in this file and drifted from
+ * the seeder, which left four of the five chips pointing at accounts that did
+ * not exist.
  */
 function DemoAccounts({ onPick }: { onPick: (identifier: string) => void }) {
   const { meta, loading } = useMeta()
-  if (loading || !meta?.demo) return null
+  const accounts = meta?.demo ? (meta.demo_accounts ?? []) : []
+  if (loading || accounts.length === 0) return null
+
+  // Grouped so the three roles are distinguishable at a glance rather than
+  // being one long undifferentiated run of chips.
+  const groups = [
+    { label: 'Admin', role: 'admin' },
+    { label: 'Technicians', role: 'technician' },
+    { label: 'Requesters', role: 'user' },
+  ]
 
   return (
     <div className="hint-box">
       <strong>Demo accounts</strong> — seeded by <code>go run . -demo</code>. Password for all of
-      them: <code>DemoDesk1234</code>
-      <div className="row row-wrap" style={{ marginTop: 8, gap: 6 }}>
-        {DEMO_ACCOUNTS.map((account) => (
-          <button key={account} type="button" className="chip" onClick={() => onPick(account)}>
-            {account}
-          </button>
-        ))}
-      </div>
+      them: <code>{DEMO_PASSWORD}</code>
+      {groups.map((group) => {
+        const members = accounts.filter((a) => a.role === group.role)
+        if (members.length === 0) return null
+        return (
+          <div key={group.role} style={{ marginTop: 8 }}>
+            <span className="muted">{group.label}: </span>
+            <span className="row row-wrap" style={{ display: 'inline-flex', gap: 6 }}>
+              {members.map((account) => (
+                <button
+                  key={account.username}
+                  type="button"
+                  className="chip"
+                  title={account.full_name}
+                  onClick={() => onPick(account.username)}
+                >
+                  {account.username}
+                </button>
+              ))}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
 /**
- * The development-only credentials. They exist only in a database seeded by the
- * -demo flag; the bootstrap administrator never uses this password.
+ * The development-only password. It matches service.DemoPassword in the backend
+ * seeder and exists only in a database created by the -demo flag. It is a fixed
+ * string rather than one fetched from /meta, which is public: serving a
+ * credential from an unauthenticated endpoint would be a footgun even for a
+ * value that only exists during local development.
  */
-const DEMO_ACCOUNTS = ['admin', 'tech', 'tech2', 'avery', 'jordan']
+const DEMO_PASSWORD = 'DemoDesk1234'

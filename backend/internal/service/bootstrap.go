@@ -416,14 +416,7 @@ func ensureDemoStaff(ctx context.Context, s *store.Store) ([]models.User, error)
 		return staff, nil
 	}
 
-	definitions := []struct {
-		username, fullName, email string
-	}{
-		{"tech.avery", "Avery Okafor", "avery.okafor@example.com"},
-		{"tech.blake", "Blake Ito", "blake.ito@example.com"},
-		{"tech.casey", "Casey Lindqvist", "casey.lindqvist@example.com"},
-		{"tech.devon", "Devon Marsh", "devon.marsh@example.com"},
-	}
+	definitions := filterDemoAccounts(models.RoleTechnician)
 
 	for _, d := range definitions {
 		hash, err := auth.HashPassword(DemoPassword)
@@ -455,18 +448,67 @@ func ensureDemoStaff(ctx context.Context, s *store.Store) ([]models.User, error)
 // generated password that is logged exactly once instead.
 const DemoPassword = "DemoDesk1234"
 
+// demoAccount is one seeded identity in the shared demo roster.
+type demoAccount struct {
+	username, fullName, email string
+	role                      models.RoleName
+}
+
+// demoAccounts is the single source of truth for the seeded demo roster.
+//
+// The seeder creates these accounts and GET /meta republishes them, so the
+// sign-in screen can only ever offer a username that exists in the database.
+// An earlier version kept a separate hand-maintained copy of the list in the
+// frontend, which drifted: four of the five chips on the login page named
+// accounts the seeder had never created.
+var demoAccounts = []demoAccount{
+	{"tech.avery", "Avery Okafor", "avery.okafor@example.com", models.RoleTechnician},
+	{"tech.blake", "Blake Ito", "blake.ito@example.com", models.RoleTechnician},
+	{"tech.casey", "Casey Lindqvist", "casey.lindqvist@example.com", models.RoleTechnician},
+	{"tech.devon", "Devon Marsh", "devon.marsh@example.com", models.RoleTechnician},
+	{"jordan.reed", "Jordan Reed", "jordan.reed@example.com", models.RoleUser},
+	{"sam.ortiz", "Sam Ortiz", "sam.ortiz@example.com", models.RoleUser},
+	{"priya.nair", "Priya Nair", "priya.nair@example.com", models.RoleUser},
+	{"kai.lindgren", "Kai Lindgren", "kai.lindgren@example.com", models.RoleUser},
+	{"robin.ashby", "Robin Ashby", "robin.ashby@example.com", models.RoleUser},
+	{"morgan.deluca", "Morgan DeLuca", "morgan.deluca@example.com", models.RoleUser},
+}
+
+// filterDemoAccounts returns the roster entries holding the given role.
+func filterDemoAccounts(role models.RoleName) []demoAccount {
+	out := make([]demoAccount, 0, len(demoAccounts))
+	for _, a := range demoAccounts {
+		if a.role == role {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// DemoAccount is a seeded username, published by GET /meta so a client can
+// offer working sign-in shortcuts without duplicating the seeder's roster.
+type DemoAccount struct {
+	Username string `json:"username"`
+	FullName string `json:"full_name"`
+	Role     string `json:"role"`
+}
+
+// DemoAccountList returns the seeded roster for display. It is empty unless the
+// server was started with -demo.
+func DemoAccountList(demoData bool) []DemoAccount {
+	if !demoData {
+		return []DemoAccount{}
+	}
+	out := make([]DemoAccount, 0, len(demoAccounts))
+	for _, a := range demoAccounts {
+		out = append(out, DemoAccount{Username: a.username, FullName: a.fullName, Role: string(a.role)})
+	}
+	return out
+}
+
 // ensureDemoRequesters provisions the end users who file tickets.
 func ensureDemoRequesters(ctx context.Context, s *store.Store) ([]models.User, error) {
-	definitions := []struct {
-		username, fullName, email string
-	}{
-		{"jordan.reed", "Jordan Reed", "jordan.reed@example.com"},
-		{"sam.ortiz", "Sam Ortiz", "sam.ortiz@example.com"},
-		{"priya.nair", "Priya Nair", "priya.nair@example.com"},
-		{"kai.lindgren", "Kai Lindgren", "kai.lindgren@example.com"},
-		{"robin.ashby", "Robin Ashby", "robin.ashby@example.com"},
-		{"morgan.deluca", "Morgan DeLuca", "morgan.deluca@example.com"},
-	}
+	definitions := filterDemoAccounts(models.RoleUser)
 
 	existing, _, err := s.Users.List(ctx, store.UserFilter{Limit: 200})
 	if err != nil {

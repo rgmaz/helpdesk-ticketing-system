@@ -243,8 +243,10 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"sort_fields":       store.SortFields(),
 		"assignment_policy": "least active ticket load; high and critical tickets prefer technicians with fewer overdue tickets; ties break on the lowest user id",
 		// The sign-in screen offers the seeded credentials only when they
-		// actually exist.
-		"demo": s.cfg.DemoData,
+		// actually exist. The usernames come from the seeder's own roster so
+		// a shortcut on the login page always resolves to a real account.
+		"demo":          s.cfg.DemoData,
+		"demo_accounts": demoAccountsFor(s.cfg),
 		"sla": map[string]any{
 			"unit":          "minutes",
 			"scan_interval": s.cfg.SLAScanInterval.String(),
