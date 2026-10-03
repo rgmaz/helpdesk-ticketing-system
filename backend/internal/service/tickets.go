@@ -65,29 +65,37 @@ type CreateRequest struct {
 // records the resulting timeline events.
 //
 // Ordering matters: the row must exist before routing and notifications so every
-// downstream record can reference its id.
+// downstream record can reference its id. It also matters that the priority is
+// settled before the policy is looked up — see below.
 func (t *Tickets) Create(ctx context.Context, actor Actor, req CreateRequest) (models.Ticket, error) {
 	now := t.clock()
 
-	policy, err := t.store.SLA.ForPriority(ctx, req.Priority)
+	// End users may not choose their own priority above the default; staff may.
+	//
+	// This runs before the policy lookup, deliberately. Resolving the policy from
+	// the requested priority and only then clamping the stored value would give a
+	// requester who asked for "critical" a medium-priority ticket carrying
+	// critical deadlines: the label would disagree with the clock, and the cap
+	// would be free to bypass by simply asking. The ticket's priority and the
+	// policy it inherits must come from the same number.
+	priority := req.Priority
+	if !actor.Role.IsStaff() && priority.Rank() > models.PriorityMedium.Rank() {
+		priority = models.PriorityMedium
+	}
+
+	policy, err := t.store.SLA.ForPriority(ctx, priority)
 	if err != nil {
 		// Without a policy the ticket is still valid, just unenforced.
 		if !errors.Is(err, models.ErrNotFound) {
 			return models.Ticket{}, err
 		}
-		slog.Warn("no active SLA policy for priority", "priority", req.Priority)
+		slog.Warn("no active SLA policy for priority", "priority", priority)
 	}
 
 	deadlines := ComputeDeadlines(policy, now)
 	if deadlines.ResponseDueAt == nil {
 		deadlines.ResponseDueAt = models.NewTime(now)
 		deadlines.ResolutionDueAt = models.NewTime(now)
-	}
-
-	// End users may not choose their own priority above the default; staff may.
-	priority := req.Priority
-	if !actor.Role.IsStaff() && priority.Rank() > models.PriorityMedium.Rank() {
-		priority = models.PriorityMedium
 	}
 
 	ticket, err := t.store.Tickets.Create(ctx, store.NewTicket{

@@ -14,8 +14,12 @@ import (
 
 func TestCreateTicketStampsSLADeadlinesAndTimeline(t *testing.T) {
 	h := newHarness(t)
-	_, _, _, user, _ := h.seed()
-	token := h.tokenFor(user, models.RoleUser)
+	_, tech, _, _, _ := h.seed()
+	// Filed by a technician rather than an end user: this test is about the
+	// priority-to-policy wiring, so it needs a priority the requester cap would
+	// otherwise clamp before the policy was ever consulted. The requester path
+	// is covered by TestEndUserPriorityIsCapped.
+	token := h.tokenFor(tech, models.RoleTechnician)
 
 	res := h.do(http.MethodPost, "/api/v1/tickets", token, map[string]any{
 		"title":       "The branch office router reboots every night",
@@ -102,7 +106,30 @@ func TestEndUserPriorityIsCapped(t *testing.T) {
 		t.Errorf("priority = %v, want medium (end users are capped at medium)", got)
 	}
 
-	// Staff may file at any severity.
+	// The cap has to cover the SLA as well as the label. Capping the stored
+	// priority but resolving the policy from the *requested* one would hand the
+	// requester critical deadlines on a ticket that says medium, which is both a
+	// lie about the contract and a free bypass of the cap. The policy's own
+	// targets are asserted rather than its id, because the ids depend on seed
+	// order while the durations are the thing that matters.
+	capped := res.Body["ticket"].(map[string]any)
+	mediumPolicy := policyByPriority(t, h, models.PriorityMedium)
+	// JSON numbers decode as float64, so the comparison is made in that domain
+	// rather than against the model's int64.
+	if got, want := capped["sla_policy_id"], float64(mediumPolicy.ID); got != want {
+		t.Errorf("sla_policy_id = %v, want %v (the medium policy)", got, want)
+	}
+	if got := capped["sla_policy_name"]; got != mediumPolicy.Name {
+		t.Errorf("sla_policy_name = %v, want %q", got, mediumPolicy.Name)
+	}
+	if got, want := capped["sla_response_due_at"], deadlineFor(t, h, models.PriorityMedium, true); !sameInstant(got, want) {
+		t.Errorf("response deadline = %v, want the medium policy's %v", got, want)
+	}
+	if got, want := capped["sla_resolution_due_at"], deadlineFor(t, h, models.PriorityMedium, false); !sameInstant(got, want) {
+		t.Errorf("resolution deadline = %v, want the medium policy's %v", got, want)
+	}
+
+	// Staff may file at any severity, and do get the matching policy.
 	staffRes := h.do(http.MethodPost, "/api/v1/tickets", h.tokenFor(tech, models.RoleTechnician), askHigh)
 	if staffRes.Status != http.StatusCreated {
 		t.Fatalf("staff create = %d; body = %s", staffRes.Status, staffRes.Raw)
@@ -110,6 +137,59 @@ func TestEndUserPriorityIsCapped(t *testing.T) {
 	if got := staffRes.Body["ticket"].(map[string]any)["priority"]; got != "critical" {
 		t.Errorf("staff priority = %v, want critical", got)
 	}
+	criticalPolicy := policyByPriority(t, h, models.PriorityCritical)
+	if got := staffRes.Body["ticket"].(map[string]any)["sla_policy_name"]; got != criticalPolicy.Name {
+		t.Errorf("staff sla_policy_name = %v, want %q", got, criticalPolicy.Name)
+	}
+}
+
+// policyByPriority returns the active policy a ticket of that priority inherits.
+func policyByPriority(t *testing.T, h *harness, priority models.Priority) models.SLAPolicy {
+	t.Helper()
+	policies, err := h.store.SLA.All(context.Background(), true)
+	if err != nil {
+		t.Fatalf("list policies: %v", err)
+	}
+	for _, p := range policies {
+		if p.Priority == string(priority) {
+			return p
+		}
+	}
+	t.Fatalf("no active policy for priority %q", priority)
+	return models.SLAPolicy{}
+}
+
+// deadlineFor computes what a ticket created now should be given as its deadline
+// for the given priority. Recomputed rather than read off the response so the
+// assertion is about the policy's targets, not about echoing back an id.
+func deadlineFor(t *testing.T, h *harness, priority models.Priority, response bool) time.Time {
+	t.Helper()
+	policy := policyByPriority(t, h, priority)
+	created := time.Now().UTC()
+
+	minutes := policy.ResolutionMinutes
+	if response {
+		minutes = policy.ResponseMinutes
+	}
+
+	// Compared at second resolution: the deadline is stored as a second-precision
+	// string, so a millisecond-precision expectation could never match.
+	return created.Add(time.Duration(minutes) * time.Minute).Truncate(time.Second)
+}
+
+// sameInstant compares two wire timestamps tolerantly of representation.
+func sameInstant(got any, want time.Time) bool {
+	text, ok := got.(string)
+	if !ok {
+		return false
+	}
+	parsed, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		return false
+	}
+	// A minute of slack absorbs the seconds elapsing between the request and
+	// this comparison without letting a wrong policy slip through.
+	return parsed.After(want.Add(-time.Minute)) && parsed.Before(want.Add(time.Minute))
 }
 
 // TestStatusTransitionsFollowTheStateMachine pins the lifecycle rules: legal
@@ -1015,14 +1095,17 @@ func TestSLAEngineFlagsBreachesAndEscalates(t *testing.T) {
 // instant as the first warning, leaving nobody time to react.
 func TestEscalationIsGradedByTimeOverdue(t *testing.T) {
 	h := newHarness(t)
-	_, _, _, user, _ := h.seed()
-	admin, err := h.store.Users.ByUsername(context.Background(), adminUsername(h))
+	adminName, _, _, _, _ := h.seed()
+	admin, err := h.store.Users.ByUsername(context.Background(), adminName)
 	if err != nil {
 		t.Fatalf("load admin: %v", err)
 	}
 
 	// Critical priority: 30-minute escalation interval, two levels permitted.
-	ticket := h.createTicketAs(user, "Payment gateway unreachable", "network", models.PriorityCritical)
+	// Filed as staff because an end user's request for critical would be capped
+	// to medium, and this test is specifically about the critical policy's
+	// grading. See createTicketAsStaff.
+	ticket := h.createTicketAsStaff("Payment gateway unreachable", "network", models.PriorityCritical)
 	makeOverdue(t, h, ticket.ID, 2*time.Minute)
 
 	h.runEngine()
