@@ -242,6 +242,9 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		// offered here automatically instead of becoming a 400 for the user.
 		"sort_fields":       store.SortFields(),
 		"assignment_policy": "least active ticket load; high and critical tickets prefer technicians with fewer overdue tickets; ties break on the lowest user id",
+		// The sign-in screen offers the seeded credentials only when they
+		// actually exist.
+		"demo": s.cfg.DemoData,
 		"sla": map[string]any{
 			"unit":          "minutes",
 			"scan_interval": s.cfg.SLAScanInterval.String(),

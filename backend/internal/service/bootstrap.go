@@ -67,7 +67,7 @@ func Bootstrap(ctx context.Context, s *store.Store, cfg BootstrapConfig) (Bootst
 
 	slog.Info("demo data seeded",
 		"tickets", created, "staff", len(staff), "requesters", len(requesters),
-		"password", demoDefaultPassword)
+		"password", DemoPassword)
 	return out, nil
 }
 
@@ -76,16 +76,26 @@ type BootstrapConfig struct {
 	AdminUsername string
 	AdminEmail    string
 	AdminPassword string
-	DemoPassword  string
-	DemoData      bool
-	DemoTickets   int
+	// DemoPassword is applied to the bootstrap administrator when DemoData is
+	// set, so a demo login is uniform across every seeded account.
+	DemoPassword string
+	DemoData     bool
+	DemoTickets  int
 }
 
 // ensureAdmin creates the bootstrap administrator when none exists.
 //
-// When an explicit password is configured it is used verbatim. Otherwise a
-// random one is generated and returned so it can be logged exactly once, rather
-// than shipping a well-known default credential.
+// Three cases, in precedence order:
+//
+//   - An explicit password is configured, and it is used verbatim. This is the
+//     only case that can run in production.
+//   - Demo data is on, so the documented demo password is used. The whole point
+//     of the demo seeder is that a developer can sign in as anybody without
+//     grepping a log, and leaving the administrator on a random password while
+//     every other account is predictable defeats that: the dashboard is the page
+//     worth looking at.
+//   - Otherwise a random password is generated and returned, so it can be logged
+//     exactly once rather than shipping a well-known default credential.
 func ensureAdmin(ctx context.Context, s *store.Store, cfg BootstrapConfig) (string, error) {
 	admins, total, err := s.Users.List(ctx, store.UserFilter{Role: models.RoleAdmin, Limit: 1})
 	if err != nil {
@@ -99,7 +109,10 @@ func ensureAdmin(ctx context.Context, s *store.Store, cfg BootstrapConfig) (stri
 
 	password := cfg.AdminPassword
 	generated := false
-	if password == "" {
+	switch {
+	case password == "" && cfg.DemoData && cfg.DemoPassword != "":
+		password = cfg.DemoPassword
+	case password == "":
 		password, err = auth.GeneratePassword(16)
 		if err != nil {
 			return "", fmt.Errorf("generate bootstrap password: %w", err)
@@ -413,7 +426,7 @@ func ensureDemoStaff(ctx context.Context, s *store.Store) ([]models.User, error)
 	}
 
 	for _, d := range definitions {
-		hash, err := auth.HashPassword(demoDefaultPassword)
+		hash, err := auth.HashPassword(DemoPassword)
 		if err != nil {
 			return nil, err
 		}
@@ -432,13 +445,15 @@ func ensureDemoStaff(ctx context.Context, s *store.Store) ([]models.User, error)
 	return staff, nil
 }
 
-// demoDefaultPassword is the documented credential for seeded demo accounts.
+// DemoPassword is the documented credential for every seeded demo account,
+// including the bootstrap administrator.
 //
 // It exists only in a development database created by the -demo flag, and it is
 // deliberately stated in the source rather than generated: a developer needs to
 // be able to log in as tech.avery without hunting through logs. No production
-// deployment runs the demo seeder, and the bootstrap administrator never uses it.
-const demoDefaultPassword = "DemoDesk1234"
+// deployment runs the demo seeder, and without -demo the administrator gets a
+// generated password that is logged exactly once instead.
+const DemoPassword = "DemoDesk1234"
 
 // ensureDemoRequesters provisions the end users who file tickets.
 func ensureDemoRequesters(ctx context.Context, s *store.Store) ([]models.User, error) {
@@ -468,7 +483,7 @@ func ensureDemoRequesters(ctx context.Context, s *store.Store) ([]models.User, e
 			users = append(users, u)
 			continue
 		}
-		hash, err := auth.HashPassword(demoDefaultPassword)
+		hash, err := auth.HashPassword(DemoPassword)
 		if err != nil {
 			return nil, err
 		}

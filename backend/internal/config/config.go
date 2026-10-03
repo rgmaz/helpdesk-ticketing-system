@@ -34,6 +34,13 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 
+	// DemoData records that the process was asked to seed demonstration
+	// accounts and tickets. GET /meta publishes it so the sign-in screen can
+	// offer those credentials only where they exist; without the signal the UI
+	// would either always advertise a login that cannot work or never mention
+	// one that does.
+	DemoData bool
+
 	// Shutdown
 	ShutdownTimeout time.Duration
 }
@@ -54,6 +61,7 @@ func Load() (*Config, error) {
 		// random password and log it once, rather than shipping a credential that
 		// is already published in the source.
 		AdminPassword:   env("ITSM_ADMIN_PASSWORD", ""),
+		DemoData:        envBool("ITSM_DEMO", false),
 		ShutdownTimeout: envDuration("ITSM_SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 
@@ -114,6 +122,23 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// envBool accepts the spellings people actually type. strconv.ParseBool alone
+// rejects "yes", which is a confusing way for a boolean to behave.
+func envBool(key string, fallback bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func envList(key, fallback string) []string {

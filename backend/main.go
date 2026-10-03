@@ -86,13 +86,21 @@ func run() error {
 
 	// Bootstrap runs before the listener starts so the first request already
 	// finds a usable system.
+	//
+	// The -demo flag is folded back into the config so GET /meta can report
+	// whether the seeded accounts exist. Otherwise the sign-in screen would have
+	// to either always offer demo credentials or never mention them.
+	cfg.DemoData = *demo
 	bootstrapCtx, cancelBootstrap := context.WithTimeout(ctx, 30*time.Second)
 	seed, err := service.Bootstrap(bootstrapCtx, st, service.BootstrapConfig{
 		AdminUsername: cfg.AdminUsername,
 		AdminEmail:    cfg.AdminEmail,
 		AdminPassword: cfg.AdminPassword,
-		DemoData:      *demo,
-		DemoTickets:   40,
+		// The demo seeder uses this for the administrator too, so a developer can
+		// sign in as anybody without reading the startup log.
+		DemoPassword: service.DemoPassword,
+		DemoData:     *demo,
+		DemoTickets:  40,
 	})
 	cancelBootstrap()
 	if err != nil {
