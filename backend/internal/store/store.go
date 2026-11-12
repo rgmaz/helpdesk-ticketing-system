@@ -21,6 +21,7 @@ type Store struct {
 	Audit     *AuditRepo
 	Notify    *NotifyRepo
 	Analytics *AnalyticsRepo
+	AI        *AIRepo
 }
 
 // New wires the repositories.
@@ -35,6 +36,7 @@ func New(db *sql.DB) *Store {
 		Audit:     &AuditRepo{db: db},
 		Notify:    &NotifyRepo{db: db},
 		Analytics: &AnalyticsRepo{db: db},
+		AI:        &AIRepo{db: db},
 	}
 }
 

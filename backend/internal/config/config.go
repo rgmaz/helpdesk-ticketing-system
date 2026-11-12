@@ -41,6 +41,20 @@ type Config struct {
 	// one that does.
 	DemoData bool
 
+	// AI assistant. The feature is off unless explicitly enabled, so an
+	// existing deployment that upgrades the binary never starts sending ticket
+	// text to a third party by surprise.
+	AIEnabled           bool
+	AIBaseURL           string
+	AIAPIKey            string
+	AIModel             string
+	AITimeout           time.Duration
+	AIPreflightTimeout  time.Duration
+	AIMaxOutputTokens   int
+	AIMonthlyBudgetUSD  float64
+	AIInputCostPerMTok  float64
+	AIOutputCostPerMTok float64
+
 	// Shutdown
 	ShutdownTimeout time.Duration
 }
@@ -63,6 +77,19 @@ func Load() (*Config, error) {
 		AdminPassword:   env("ITSM_ADMIN_PASSWORD", ""),
 		DemoData:        envBool("ITSM_DEMO", false),
 		ShutdownTimeout: envDuration("ITSM_SHUTDOWN_TIMEOUT", 10*time.Second),
+
+		// AI assistant. Defaults describe an OpenAI-compatible endpoint; the
+		// feature stays off until ITSM_AI_ENABLED is set.
+		AIEnabled:           envBool("ITSM_AI_ENABLED", false),
+		AIBaseURL:           env("ITSM_AI_BASE_URL", "https://api.openai.com/v1"),
+		AIAPIKey:            env("ITSM_AI_API_KEY", ""),
+		AIModel:             env("ITSM_AI_MODEL", "gpt-4o-mini"),
+		AITimeout:           envDuration("ITSM_AI_TIMEOUT", 20*time.Second),
+		AIPreflightTimeout:  envDuration("ITSM_AI_PREFLIGHT_TIMEOUT", 3*time.Second),
+		AIMaxOutputTokens:   envInt("ITSM_AI_MAX_OUTPUT_TOKENS", 400),
+		AIMonthlyBudgetUSD:  envFloat("ITSM_AI_MONTHLY_BUDGET_USD", 0),
+		AIInputCostPerMTok:  envFloat("ITSM_AI_INPUT_COST_PER_MTOK", 0.15),
+		AIOutputCostPerMTok: envFloat("ITSM_AI_OUTPUT_COST_PER_MTOK", 0.60),
 	}
 
 	if len(cfg.JWTSecret) == 0 {
@@ -73,6 +100,17 @@ func Load() (*Config, error) {
 	}
 	if cfg.SLAScanInterval < time.Second {
 		return nil, fmt.Errorf("ITSM_SLA_SCAN_INTERVAL must be >= 1s")
+	}
+	if cfg.AIEnabled {
+		if strings.TrimSpace(cfg.AIBaseURL) == "" {
+			return nil, fmt.Errorf("ITSM_AI_BASE_URL must be set when ITSM_AI_ENABLED is true")
+		}
+		if strings.TrimSpace(cfg.AIModel) == "" {
+			return nil, fmt.Errorf("ITSM_AI_MODEL must be set when ITSM_AI_ENABLED is true")
+		}
+		if cfg.AIPreflightTimeout <= 0 || cfg.AITimeout <= 0 {
+			return nil, fmt.Errorf("ITSM_AI_TIMEOUT and ITSM_AI_PREFLIGHT_TIMEOUT must be positive")
+		}
 	}
 	return cfg, nil
 }
@@ -122,6 +160,21 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// envFloat parses a decimal setting such as a spend cap or a per-token price.
+// A malformed value falls back rather than aborting startup, matching the other
+// numeric helpers: a typo in an optional knob should not keep the service down.
+func envFloat(key string, fallback float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 // envBool accepts the spellings people actually type. strconv.ParseBool alone

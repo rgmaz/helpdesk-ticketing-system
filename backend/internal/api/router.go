@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ryan/ticketing-system/backend/internal/ai"
 	"github.com/ryan/ticketing-system/backend/internal/auth"
 	"github.com/ryan/ticketing-system/backend/internal/config"
 	"github.com/ryan/ticketing-system/backend/internal/httpx"
@@ -43,15 +44,16 @@ type Server struct {
 	tokens  *auth.Manager
 	tickets *service.Tickets
 	sla     *service.SLAEngine
+	ai      *ai.Service
 	started int64
 }
 
 // NewServer wires the API layer.
 func NewServer(cfg *config.Config, s *store.Store, hub *notify.Hub, tokens *auth.Manager,
-	tickets *service.Tickets, sla *service.SLAEngine, startedAt int64) *Server {
+	tickets *service.Tickets, sla *service.SLAEngine, assistant *ai.Service, startedAt int64) *Server {
 	return &Server{
 		cfg: cfg, store: s, hub: hub, tokens: tokens,
-		tickets: tickets, sla: sla, started: startedAt,
+		tickets: tickets, sla: sla, ai: assistant, started: startedAt,
 	}
 }
 
@@ -132,6 +134,15 @@ func (s *Server) Routes() http.Handler {
 
 	// System health for the SLA engine
 	staff("GET /api/v1/system/sla-engine", s.handleSLAEngineStats)
+
+	// AI triage: preflight is open to any authenticated user and heavily
+	// rate-limited; the suggestion lifecycle is staff-only because accepting a
+	// category, priority or duplicate is a triage action.
+	any("POST /api/v1/ai/triage", s.handleTriage)
+	staff("GET /api/v1/tickets/{ticket_id}/ai/suggestions", s.handleListAISuggestions)
+	staff("POST /api/v1/tickets/{ticket_id}/ai/suggestions/{suggestion_id}/accept", s.handleAcceptAISuggestion)
+	staff("POST /api/v1/tickets/{ticket_id}/ai/suggestions/{suggestion_id}/reject", s.handleRejectAISuggestion)
+	admin("GET /api/v1/ai/health", s.handleAIHealth)
 
 	return httpx.Chain(mux,
 		httpx.SecurityHeaders,

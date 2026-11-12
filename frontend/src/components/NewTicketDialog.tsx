@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api } from '../api/client'
-import type { CreateTicketInput, Priority } from '../api/types'
+import type { CreateTicketInput, Priority, TriageResult } from '../api/types'
+import { useDebounced } from '../hooks/useAsync'
+import { humanize } from '../lib/format'
 import { useMeta } from '../state/MetaContext'
 import { useToast } from '../state/ToastContext'
 import { Modal } from './Modal'
@@ -39,6 +41,48 @@ export function NewTicketDialog({
   const [technicians, setTechnicians] = useState<{ id: number; full_name: string; active_tickets: number }[]>([])
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [triage, setTriage] = useState<{ key: string; result: TriageResult } | null>(null)
+
+  // Preflight is debounced so a fast typist produces one request, not one per
+  // keystroke. It is also cancelled when the inputs change again, so a slow
+  // response cannot overwrite a newer one. The result is tagged with the inputs
+  // it answers, so the panel disappears while a new request is in flight rather
+  // than showing advice about text the user has already edited.
+  const debouncedTitle = useDebounced(title, 700)
+  const debouncedDescription = useDebounced(description, 700)
+  const enoughText =
+    debouncedTitle.trim().length >= 8 || debouncedDescription.trim().length >= 20
+  const triageKey = [debouncedTitle.trim(), debouncedDescription.trim(), category, priority].join('\u0000')
+
+  useEffect(() => {
+    if (!meta?.ai?.enabled || !enoughText) return
+
+    const key = triageKey
+    const controller = new AbortController()
+    api
+      .triage(
+        {
+          title: debouncedTitle.trim(),
+          description: debouncedDescription.trim(),
+          category,
+          priority,
+        },
+        controller.signal,
+      )
+      .then((result) => {
+        if (!controller.signal.aborted) setTriage({ key, result })
+      })
+      .catch((err: unknown) => {
+        // Suggestions are a convenience: a failed or rate-limited preflight must
+        // leave the form exactly as it was before AI existed.
+        if ((err as Error).name === 'AbortError') return
+        if (!controller.signal.aborted) setTriage(null)
+      })
+    return () => controller.abort()
+    // triageKey is derived from the debounced text and the two selects; using it
+    // keeps the dependency list honest without re-listing each part.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [triageKey, meta?.ai?.enabled, enoughText])
 
   const allowed: Priority[] = allowPriorityEscalation
     ? ['low', 'medium', 'high', 'critical']
@@ -95,6 +139,21 @@ export function NewTicketDialog({
     }
   }
 
+  const current = triage?.key === triageKey ? triage.result : null
+  const categorySuggestion = current?.suggestions.category
+  const prioritySuggestion = current?.suggestions.priority
+  const priorityCanApply = prioritySuggestion
+    ? allowed.includes(prioritySuggestion.value as Priority)
+    : false
+  const hasSuggestions = Boolean(
+    enoughText &&
+      current &&
+      !current.degraded &&
+      ((categorySuggestion && categorySuggestion.value !== category) ||
+        (prioritySuggestion && prioritySuggestion.value !== priority) ||
+        current.duplicates.length > 0),
+  )
+
   return (
     <Modal
       title="New ticket"
@@ -147,6 +206,76 @@ export function NewTicketDialog({
             required
           />
         </Field>
+
+        {hasSuggestions && current && (
+          <div className="ai-panel" role="status" aria-live="polite">
+            <div className="ai-panel-head">
+              <span className="badge">AI suggestion</span>
+              <span className="faint" style={{ fontSize: '0.72rem' }}>
+                Advisory only. Nothing changes unless you choose it.
+              </span>
+            </div>
+
+            {categorySuggestion && categorySuggestion.value !== category && (
+              <div className="ai-suggestion">
+                <div>
+                  <span className="ai-label">Category</span>{' '}
+                  <strong>{humanize(categorySuggestion.value)}</strong>{' '}
+                  <span className="faint">{Math.round(categorySuggestion.confidence * 100)}%</span>
+                </div>
+                <p className="muted">{categorySuggestion.rationale}</p>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setCategory(categorySuggestion.value)}
+                >
+                  Use this category
+                </button>
+              </div>
+            )}
+
+            {prioritySuggestion && prioritySuggestion.value !== priority && (
+              <div className="ai-suggestion">
+                <div>
+                  <span className="ai-label">Priority</span>{' '}
+                  <strong>{priorityLabel(prioritySuggestion.value as Priority)}</strong>{' '}
+                  <span className="faint">{Math.round(prioritySuggestion.confidence * 100)}%</span>
+                </div>
+                <p className="muted">{prioritySuggestion.rationale}</p>
+                {priorityCanApply ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setPriority(prioritySuggestion.value as Priority)}
+                  >
+                    Use this priority
+                  </button>
+                ) : (
+                  <span className="faint" style={{ fontSize: '0.78rem' }}>
+                    Staff can confirm a higher priority after submission.
+                  </span>
+                )}
+              </div>
+            )}
+
+            {current.duplicates.length > 0 && (
+              <div className="ai-suggestion">
+                <div className="ai-label">Possible duplicates</div>
+                <ul className="ai-duplicates">
+                  {current.duplicates.map((duplicate) => (
+                    <li key={duplicate.ticket_id}>
+                      <span className="mono">{duplicate.ticket_number}</span> — {duplicate.title}
+                      {duplicate.snippet && <div className="faint">{duplicate.snippet}</div>}
+                    </li>
+                  ))}
+                </ul>
+                <p className="faint" style={{ fontSize: '0.78rem' }}>
+                  If one of these is the same issue, you can reference it in your description.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
           <div className="grow">

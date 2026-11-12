@@ -197,6 +197,28 @@ label {
 
 .card-pad { padding: 16px; }
 
+/* AI suggestions are visually distinct but intentionally quiet: they are advice,
+   not a system state, and must never look like a required action. */
+.ai-panel { display: flex; flex-direction: column; gap: 10px; }
+.ai-panel-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-suggestion {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px 12px;
+  font-size: 0.875rem;
+}
+.ai-suggestion p { margin: 6px 0 8px; }
+.ai-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.ai-duplicates { margin: 6px 0 8px; padding-left: 18px; }
+.ai-duplicates li { margin-bottom: 6px; }
+
 .badge {
   display: inline-flex;
   align-items: center;

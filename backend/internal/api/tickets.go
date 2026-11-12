@@ -68,6 +68,10 @@ func (s *Server) handleCreateTicket(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, err)
 		return
 	}
+	// Advisory analysis runs asynchronously. Enqueueing here, after the ticket
+	// exists, keeps the service layer free of AI concerns and means a queue
+	// failure cannot roll back a successful creation.
+	s.ai.EnqueueTriage(r.Context(), ticket)
 	httpx.Created(w, map[string]any{"ticket": ticket})
 }
 

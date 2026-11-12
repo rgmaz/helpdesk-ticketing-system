@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { TicketDetail, TicketStatus } from '../api/types'
+import type { AISuggestion, Page, Priority, TicketDetail, TicketStatus } from '../api/types'
 import { Modal } from '../components/Modal'
 import {
   Card,
@@ -37,13 +37,23 @@ export function TicketPage() {
   const id = Number(ticketId)
 
   const { isStaff: staff, user } = useAuth()
-  const { meta } = useMeta()
+  const { meta, priorityLabel } = useMeta()
   const toast = useToast()
 
   const detail = useAsync<TicketDetail>(() => api.getTicket(id), [id])
+  // Staff get the advisory triage panel; requesters never see suggestions.
+  const aiSuggestions = useAsync<Page<AISuggestion>>(
+    () =>
+      staff
+        ? api.aiSuggestions(id)
+        : Promise.resolve({ items: [], total: 0, page: 1, limit: 0, pages: 0 }),
+    [id, staff],
+  )
   // Refresh on any ticket-scoped event, so a change made by somebody else in
-  // another tab appears without a reload.
+  // another tab appears without a reload. The worker pushes its own event when
+  // an asynchronous analysis finishes.
   useLiveRefresh(DETAIL_EVENTS, detail.reload)
+  useLiveRefresh(['ai_suggestion_ready'], aiSuggestions.reload)
 
   // The status being resolved, or null. The value is the target status so the
   // dialog knows whether it is resolving or closing, rather than a bare flag it
@@ -52,6 +62,7 @@ export function TicketPage() {
   const [assigning, setAssigning] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [aiBusy, setAiBusy] = useState<number | null>(null)
 
   if (!Number.isFinite(id)) {
     return (
@@ -112,6 +123,33 @@ export function TicketPage() {
     }
     void changeStatus(next)
   }
+
+  /**
+   * Accepting a suggestion goes through the server's normal update path, so the
+   * transition table, SLA clocks, timeline and audit trail all behave exactly
+   * as they do for a manual edit. Accepting a duplicate only adds an internal
+   * note; it never closes the ticket.
+   */
+  const decideSuggestion = async (suggestion: AISuggestion, accept: boolean) => {
+    setAiBusy(suggestion.id)
+    try {
+      if (accept) {
+        await api.acceptAISuggestion(id, suggestion.id)
+        toast.success('Suggestion applied.')
+      } else {
+        await api.rejectAISuggestion(id, suggestion.id)
+        toast.success('Suggestion dismissed.')
+      }
+      detail.reload()
+      aiSuggestions.reload()
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setAiBusy(null)
+    }
+  }
+
+  const aiItems = aiSuggestions.data?.items ?? []
 
   return (
     <>
@@ -210,6 +248,56 @@ export function TicketPage() {
         </div>
 
         <div className="stack">
+          {staff && meta?.ai?.enabled && aiItems.length > 0 && (
+            <Card title="AI triage">
+              <div className="ai-panel">
+                {aiItems.map((suggestion) => {
+                  const decided = suggestion.accepted_at !== null || suggestion.rejected_at !== null
+                  return (
+                    <div key={suggestion.id} className="ai-suggestion">
+                      <div>
+                        <span className="ai-label">{suggestionKindLabel(suggestion.kind)}</span>{' '}
+                        <strong>{suggestionValue(suggestion, priorityLabel, humanize)}</strong>{' '}
+                        <span className="faint">
+                          {Math.round(suggestion.confidence * 100)}% confident
+                        </span>
+                      </div>
+                      {suggestion.rationale && <p className="muted">{suggestion.rationale}</p>}
+                      {decided ? (
+                        <span className="faint">
+                          {suggestion.accepted_at ? 'Accepted' : 'Dismissed'}
+                        </span>
+                      ) : (
+                        <div className="row">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            disabled={aiBusy === suggestion.id}
+                            onClick={() => void decideSuggestion(suggestion, true)}
+                          >
+                            {aiBusy === suggestion.id ? 'Applying…' : 'Accept'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            disabled={aiBusy === suggestion.id}
+                            onClick={() => void decideSuggestion(suggestion, false)}
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                <p className="faint" style={{ fontSize: '0.72rem' }}>
+                  Generated by {aiItems[0].model} · prompt {aiItems[0].prompt_version}. Review before
+                  applying.
+                </p>
+              </div>
+            </Card>
+          )}
+
           <Card title="SLA">
             <MetaList>
               <MetaRow label="Policy">
@@ -312,6 +400,34 @@ export function TicketPage() {
       )}
     </>
   )
+}
+
+function suggestionKindLabel(kind: AISuggestion['kind']): string {
+  switch (kind) {
+    case 'category':
+      return 'Category'
+    case 'priority':
+      return 'Priority'
+    case 'duplicate':
+      return 'Duplicate'
+    default:
+      return 'Suggestion'
+  }
+}
+
+function suggestionValue(
+  suggestion: AISuggestion,
+  priorityLabel: (priority: Priority) => string,
+  humanizeValue: (value: string) => string,
+): string {
+  if (suggestion.kind === 'priority') {
+    return priorityLabel(suggestion.value as Priority)
+  }
+  if (suggestion.kind === 'duplicate') {
+    const citation = suggestion.citations?.[0]?.ticket_number
+    return citation ? `Possible duplicate of ${citation}` : 'Possible duplicate'
+  }
+  return humanizeValue(suggestion.value)
 }
 
 /** A single SLA clock line: the deadline, and how much of it is left or gone. */

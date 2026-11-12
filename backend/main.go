@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ryan/ticketing-system/backend/internal/ai"
 	"github.com/ryan/ticketing-system/backend/internal/api"
 	"github.com/ryan/ticketing-system/backend/internal/auth"
 	"github.com/ryan/ticketing-system/backend/internal/config"
@@ -83,6 +84,18 @@ func run() error {
 	router := service.NewRouter(st.Users, st.Tickets)
 	tickets := service.NewTickets(st, hub, router)
 	sla := service.NewSLAEngine(st, hub, cfg.SLAScanInterval, cfg.SLAWarnBefore)
+	assistant := ai.NewService(st, hub, ai.Config{
+		Enabled:           cfg.AIEnabled,
+		BaseURL:           cfg.AIBaseURL,
+		APIKey:            cfg.AIAPIKey,
+		Model:             cfg.AIModel,
+		Timeout:           cfg.AITimeout,
+		PreflightTimeout:  cfg.AIPreflightTimeout,
+		MaxOutputTokens:   cfg.AIMaxOutputTokens,
+		MonthlyBudgetUSD:  cfg.AIMonthlyBudgetUSD,
+		InputCostPerMTok:  cfg.AIInputCostPerMTok,
+		OutputCostPerMTok: cfg.AIOutputCostPerMTok,
+	})
 
 	// Bootstrap runs before the listener starts so the first request already
 	// finds a usable system.
@@ -118,7 +131,15 @@ func run() error {
 		sla.Run(ctx)
 	}()
 
-	server := api.NewServer(cfg, st, hub, tokens, tickets, sla, time.Now().Unix())
+	// The AI worker shares the same lifetime. When the feature is disabled it
+	// logs once and returns, so there is no idle goroutine or surprising call.
+	aiDone := make(chan struct{})
+	go func() {
+		defer close(aiDone)
+		assistant.Run(ctx)
+	}()
+
+	server := api.NewServer(cfg, st, hub, tokens, tickets, sla, assistant, time.Now().Unix())
 	httpServer := &http.Server{
 		Addr:              cfg.Addr(),
 		Handler:           server.Routes(),
@@ -160,6 +181,7 @@ func run() error {
 	}
 	stop()
 	<-workerDone
+	<-aiDone
 
 	total, staff := hub.Stats()
 	slog.Info("stopped", "connected_clients", total, "staff_clients", staff)

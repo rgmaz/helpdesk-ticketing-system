@@ -247,6 +247,10 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		// a shortcut on the login page always resolves to a real account.
 		"demo":          s.cfg.DemoData,
 		"demo_accounts": demoAccountsFor(s.cfg),
+		"ai": map[string]any{
+			"enabled":        s.ai.Enabled(),
+			"prompt_version": s.ai.PromptVersion(),
+		},
 		"sla": map[string]any{
 			"unit":          "minutes",
 			"scan_interval": s.cfg.SLAScanInterval.String(),

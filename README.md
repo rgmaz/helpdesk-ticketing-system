@@ -84,6 +84,16 @@ characters.
 | `ITSM_ACCESS_TTL`         | `12h`                         | Token lifetime                                       |
 | `ITSM_SLA_SCAN_INTERVAL`  | `1m`                          | SLA engine tick, ≥ 1s                                |
 | `ITSM_SLA_WARN_BEFORE`    | `15m`                         | How early a deadline counts as "at risk"             |
+| `ITSM_AI_ENABLED`         | `false`                       | Turn the advisory AI triage assistant on             |
+| `ITSM_AI_BASE_URL`        | `https://api.openai.com/v1`   | OpenAI-compatible base URL                           |
+| `ITSM_AI_API_KEY`         | *(empty)*                     | Bearer token for the provider                        |
+| `ITSM_AI_MODEL`           | `gpt-4o-mini`                 | Chat model used for classification                   |
+| `ITSM_AI_TIMEOUT`         | `20s`                         | Async analysis timeout                               |
+| `ITSM_AI_PREFLIGHT_TIMEOUT` | `3s`                        | Composer preflight timeout                           |
+| `ITSM_AI_MAX_OUTPUT_TOKENS` | `400`                       | Cap on the JSON response                             |
+| `ITSM_AI_MONTHLY_BUDGET_USD` | `0`                         | Spend cap for this process; `0` means uncapped       |
+| `ITSM_AI_INPUT_COST_PER_MTOK` | `0.15`                     | Price used by the spend meter                        |
+| `ITSM_AI_OUTPUT_COST_PER_MTOK` | `0.60`                    | Price used by the spend meter                        |
 | `ITSM_ADMIN_USERNAME`     | `admin`                       | Bootstrap administrator name                         |
 | `ITSM_ADMIN_EMAIL`        | `admin@itsm.local`            | Bootstrap administrator email                        |
 | `ITSM_ADMIN_PASSWORD`     | *(generated and logged)*      | Bootstrap password; unset generates a random one     |
@@ -159,6 +169,165 @@ not compound on whoever is already behind. Ties break on the lowest user id to
 keep assignment deterministic and testable. Administrators are never
 auto-assigned — they are escalation destinations, and putting them in the pool
 would quietly drain the front line.
+
+### AI-assisted triage
+
+Off by default. When `ITSM_AI_ENABLED` is set, the service desk gains two
+advisory features:
+
+- **Preflight** — while a requester is composing a ticket, the form asks the
+  configured model for a category, a priority and a list of possible duplicates.
+  The request is debounced, cancelled on keystroke, cached for ten minutes and
+  rate-limited per user.
+- **Post-create analysis** — a newly created ticket is queued for the background
+  worker. Results arrive over the existing SSE stream as
+  `ai_suggestion_ready`, and staff can accept or dismiss them on the ticket page.
+
+The model never writes to a ticket. Suggestions live in `ai_jobs` and
+`ai_suggestions`; accepting one calls the normal `service.Tickets.Update` path,
+so the transition table, SLA clocks, timeline events, audit trail and
+notifications behave exactly as they do for a manual edit. Accepting a
+**duplicate** only adds an internal note pointing at the canonical ticket — it
+does not close anything.
+
+Duplicate candidates come from the existing FTS5 index, and the scope is applied
+in SQL: a requester's preflight searches only their own tickets, while staff
+search the whole corpus. Ticket text is redacted before egress — credentials
+always, and email/IPv4 addresses too on the requester preflight — and the model's
+output is validated against the closed category and priority enums. A
+hallucinated ticket id is dropped, never stored.
+
+If the provider is slow, rate-limited or down, the form degrades to its
+pre-AI behaviour; ticket creation is never on the critical path. The health view
+for administrators is `GET /api/v1/ai/health`.
+
+Any OpenAI-compatible endpoint works:
+
+```sh
+ITSM_JWT_SECRET=$(openssl rand -hex 32) \
+ITSM_AI_ENABLED=true \
+ITSM_AI_BASE_URL=https://api.openai.com/v1 \
+ITSM_AI_API_KEY=sk-... \
+ITSM_AI_MODEL=gpt-4o-mini \
+go run . -demo
+```
+
+#### Testing it
+
+The focused suites need no network or API key:
+
+```sh
+cd backend
+go test ./internal/ai/... -v
+go test ./internal/api/... -v -run 'Triage|Suggestion|Duplicate'
+```
+
+For a manual pass without spending tokens, run a fake OpenAI-compatible server.
+It answers `POST /v1/chat/completions` with the shape the prompt requests and
+echoes the first FTS candidate back as a duplicate, which exercises the whole
+pipeline including acceptance:
+
+```sh
+python3 - <<'PY'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+
+class Fake(BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get('Content-Length', 0))
+        body = json.loads(self.rfile.read(n))
+        payload = json.loads(body['messages'][1]['content'])
+        print('provider saw:', payload['ticket'], flush=True)
+        cands = payload.get('candidates') or []
+        content = json.dumps({
+            'category': {'value': 'network', 'confidence': 0.9, 'rationale': 'fake'},
+            'priority': {'value': 'high', 'confidence': 0.8, 'rationale': 'fake'},
+            'duplicates': [{'ticket_id': cands[0]['ticket_id'], 'score': 0.9,
+                            'rationale': 'fake'}] if cands else [],
+        })
+        out = json.dumps({
+            'model': 'fake-model',
+            'choices': [{'message': {'content': content}}],
+            'usage': {'prompt_tokens': 40, 'completion_tokens': 20},
+        }).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def log_message(self, *args):
+        pass
+
+HTTPServer(('127.0.0.1', 8099), Fake).serve_forever()
+PY
+```
+
+Point a throwaway database at it (`-demo` only seeds an empty one, and leaving
+`ITSM_DB_PATH` unset would touch your development copy):
+
+```sh
+cd backend
+ITSM_JWT_SECRET=$(openssl rand -hex 32) \
+ITSM_DB_PATH=/tmp/ai-test.db \
+ITSM_AI_ENABLED=true \
+ITSM_AI_BASE_URL=http://127.0.0.1:8099/v1 \
+ITSM_AI_API_KEY=fake \
+go run . -demo
+```
+
+Exchange a demo login for a token and try the composer preflight. The fake
+server's `provider saw:` line shows what actually left the process, so this is
+also how to confirm redaction:
+
+```sh
+TOKEN=$(curl -s localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"identifier":"jordan.reed","password":"DemoDesk1234"}' | jq -r .token)
+
+curl -s localhost:8080/api/v1/ai/triage \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"VPN keeps dropping","description":"Disconnects every few minutes. password=hunter2 ping 10.0.0.4","category":"network","priority":"medium"}' | jq
+```
+
+Filing a ticket queues the worker. The result appears after the next two-second
+tick, and a staff token can read it:
+
+```sh
+ID=$(curl -s -X POST localhost:8080/api/v1/tickets -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"VPN keeps dropping","description":"Disconnects every few minutes","category":"network","priority":"medium"}' | jq -r .ticket.id)
+
+TECH=$(curl -s localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"identifier":"tech.avery","password":"DemoDesk1234"}' | jq -r .token)
+
+sleep 3
+curl -s localhost:8080/api/v1/tickets/$ID/ai/suggestions \
+  -H "Authorization: Bearer $TECH" | jq '.items[] | {kind, value, confidence}'
+```
+
+The guards are worth checking by hand as well as in the suite:
+
+| Scenario | How | Expected |
+| -------- | --- | -------- |
+| Disabled | omit `ITSM_AI_ENABLED` | `/meta` reports `ai.enabled=false`; preflight is `503 ai_disabled`; ticket creation is unchanged |
+| Provider down | `ITSM_AI_BASE_URL=http://127.0.0.1:1/v1`, short timeout | `200` with `degraded: true`; the form behaves as it did before AI existed |
+| Rate limit | six rapid, distinct preflights | the sixth is `429 ai_rate_limited` (burst five, one refill per four seconds) |
+| Budget cap | `ITSM_AI_MONTHLY_BUDGET_USD=0.0000001` | the first call runs; later calls degrade until the month rolls over |
+| Cache | repeat an identical preflight | `cached: true` and no second provider call |
+| Cross-user scope | the same text as two requesters | each sees only their own duplicates |
+| Non-staff | requester calls `GET .../ai/suggestions` | `403` |
+| Double accept | accept the same suggestion twice | the second is `409 conflict` |
+| Duplicate accept | accept a `duplicate` suggestion | one internal note, no public comment, status unchanged |
+| Prompt injection | "ignore previous instructions" in the description | unknown values are dropped; no suggestion is stored if nothing valid remains |
+
+Worker state is inspectable directly:
+
+```sh
+sqlite3 /tmp/ai-test.db \
+  "select id,ticket_id,kind,state,attempts,model,prompt_tokens,cost_usd from ai_jobs order by id desc limit 5;"
+sqlite3 /tmp/ai-test.db \
+  "select id,ticket_id,kind,value,confidence,accepted_at,rejected_at from ai_suggestions order by id desc limit 10;"
+```
 
 ### SLA engine
 
@@ -240,6 +409,7 @@ an account can also sign in as one, so registration is followed by a normal logi
 | POST   | `/notifications/read-all`                     | Clear the badge                |
 | GET    | `/notifications/stream`                       | SSE                            |
 | GET    | `/categories`, `/sla-policies`, `/roles`      | Reference data                 |
+| POST   | `/ai/triage`                                  | Composer preflight (if enabled) |
 
 ### Writes
 
@@ -251,10 +421,14 @@ ticket's current state. `DELETE /tickets/{id}` is admin only.
 
 `GET /users`, `GET /technicians`, `GET /system/sla-engine`.
 
+With the AI assistant enabled, staff also get `GET
+/tickets/{id}/ai/suggestions` plus `POST
+/tickets/{id}/ai/suggestions/{suggestion_id}/accept` and `/reject`.
+
 ### Admin only
 
 `POST`/`PATCH`/`DELETE` on `/users`, `PATCH /sla-policies/{id}`, all of
-`/analytics/*`, and `GET /audit`.
+`/analytics/*`, `GET /audit`, and `GET /ai/health`.
 
 ### Listing
 

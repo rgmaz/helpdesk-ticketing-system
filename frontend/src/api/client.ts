@@ -1,4 +1,5 @@
 import type {
+  AISuggestion,
   Comment,
   CreateTicketInput,
   DashboardPayload,
@@ -16,6 +17,7 @@ import type {
   TicketDetail,
   TicketQuery,
   TicketStatus,
+  TriageResult,
   UpdateTicketInput,
   User,
   WorkloadReport,
@@ -261,6 +263,41 @@ export const api = {
 
   addComment(id: number, body: string, internal: boolean): Promise<{ comment: Comment }> {
     return request(`/tickets/${id}/comments`, { method: 'POST', body: { body, internal } })
+  },
+
+  // --- AI triage (advisory) ---
+  /**
+   * Classifies text while the user is still composing. The server may return a
+   * degraded, empty result when the provider is unavailable; callers should
+   * treat that as "no suggestion", never as an error.
+   */
+  triage(
+    input: { title: string; description: string; category?: string; priority?: Priority },
+    signal?: AbortSignal,
+  ): Promise<TriageResult> {
+    return request('/ai/triage', { method: 'POST', body: input, signal })
+  },
+
+  aiSuggestions(ticketId: number): Promise<Page<AISuggestion>> {
+    return request(`/tickets/${ticketId}/ai/suggestions`)
+  },
+
+  acceptAISuggestion(
+    ticketId: number,
+    suggestionId: number,
+  ): Promise<{ ticket: Ticket; suggestion: AISuggestion }> {
+    return request(`/tickets/${ticketId}/ai/suggestions/${suggestionId}/accept`, {
+      method: 'POST',
+    })
+  },
+
+  rejectAISuggestion(
+    ticketId: number,
+    suggestionId: number,
+  ): Promise<{ id: number; rejected: boolean }> {
+    return request(`/tickets/${ticketId}/ai/suggestions/${suggestionId}/reject`, {
+      method: 'POST',
+    })
   },
 
   // --- people ---

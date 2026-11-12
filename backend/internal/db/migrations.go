@@ -234,6 +234,57 @@ CREATE INDEX IF NOT EXISTS idx_audit_ticket   ON audit_logs(ticket_id, created_a
 CREATE INDEX IF NOT EXISTS idx_audit_action   ON audit_logs(action, created_at DESC);
 `,
 	},
+	{
+		Version: 6,
+		Name:    "ai_triage",
+		SQL: `
+-- The AI layer is advisory: it writes only to its own tables. Accepting a
+-- suggestion goes through the existing service layer, so ticket rules, SLA
+-- clocks, events and audit rows keep behaving exactly as before.
+CREATE TABLE IF NOT EXISTS ai_jobs (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id         INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+    kind              TEXT NOT NULL,
+    input_hash        TEXT NOT NULL,
+    prompt_version    TEXT NOT NULL,
+    state             TEXT NOT NULL DEFAULT 'queued'
+                      CHECK (state IN ('queued','running','succeeded','failed','skipped')),
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    lease_until       TEXT,
+    last_error        TEXT,
+    model             TEXT,
+    latency_ms        INTEGER,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    cost_usd          REAL,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(ticket_id, kind, input_hash, prompt_version)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_state ON ai_jobs(state, id);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_ticket ON ai_jobs(ticket_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ai_suggestions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id         INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
+    ticket_id      INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL CHECK (kind IN ('category','priority','duplicate')),
+    value          TEXT NOT NULL,
+    confidence     REAL NOT NULL DEFAULT 0,
+    rationale      TEXT NOT NULL DEFAULT '',
+    citations      TEXT,
+    model          TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    accepted_at    TEXT,
+    accepted_by    INTEGER REFERENCES users(id),
+    rejected_at    TEXT,
+    rejected_by    INTEGER REFERENCES users(id),
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_suggestions_ticket ON ai_suggestions(ticket_id, kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_suggestions_job ON ai_suggestions(job_id);
+`,
+	},
 }
 
 // migrate applies every unapplied migration inside a transaction, recording it

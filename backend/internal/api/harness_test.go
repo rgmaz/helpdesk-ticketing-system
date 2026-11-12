@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryan/ticketing-system/backend/internal/ai"
 	"github.com/ryan/ticketing-system/backend/internal/auth"
 	"github.com/ryan/ticketing-system/backend/internal/config"
 	"github.com/ryan/ticketing-system/backend/internal/db"
@@ -32,10 +33,18 @@ type harness struct {
 	store   *store.Store
 	handler http.Handler
 	tokens  *auth.Manager
+	ai      *ai.Service
 }
 
-// newHarness builds a server with a fresh database and the given accounts.
+// newHarness builds a server with a fresh database and AI disabled.
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWithProvider(t, nil)
+}
+
+// newHarnessWithProvider builds a harness whose AI service uses the supplied
+// provider. A nil provider keeps the feature off, which is the default.
+func newHarnessWithProvider(t *testing.T, provider ai.Provider) *harness {
 	t.Helper()
 
 	database, err := db.Open(filepath.Join(t.TempDir(), "itsm-test.db"))
@@ -73,13 +82,22 @@ func newHarness(t *testing.T) *harness {
 	// A short scan interval lets tests observe several passes of the real ticker
 	// loop. Production uses ITSM_SLA_SCAN_INTERVAL, which is a minute.
 	sla := service.NewSLAEngine(st, hub, 20*time.Millisecond, 15*time.Minute)
+	assistant := ai.NewServiceWithProvider(st, hub, ai.Config{
+		Enabled:          provider != nil,
+		Model:            "test-model",
+		PreflightTimeout: time.Second,
+		Timeout:          time.Second,
+		MaxAttempts:      1,
+		MaxCandidates:    10,
+	}, provider)
 
-	srv := NewServer(cfg, st, hub, tokens, tickets, sla, time.Now().Unix())
+	srv := NewServer(cfg, st, hub, tokens, tickets, sla, assistant, time.Now().Unix())
 	return &harness{
 		t:       t,
 		server:  srv,
 		store:   st,
 		tokens:  tokens,
+		ai:      assistant,
 		handler: srv.Routes(),
 	}
 }

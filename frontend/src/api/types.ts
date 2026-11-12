@@ -302,6 +302,8 @@ export interface Meta {
   policies: SLAPolicy[]
   sort_fields: string[]
   assignment_policy: string
+  /** Whether the advisory AI assistant is switched on for this deployment. */
+  ai?: { enabled: boolean; prompt_version?: string }
   /**
    * True when the backend was started with -demo and seeded the sample accounts.
    * The sign-in screen offers them only then. The password is deliberately not
@@ -361,4 +363,57 @@ export interface UpdateTicketInput {
   assignee_id?: number
   unassign?: boolean
   resolution_notes?: string
+}
+
+// --- AI triage (advisory only) ---
+
+export interface TriageSuggestion {
+  value: string
+  confidence: number
+  rationale: string
+}
+
+export interface TriageDuplicate {
+  ticket_id: number
+  ticket_number: string
+  title: string
+  snippet: string
+  score: number
+  score_kind: string
+}
+
+/** POST /ai/triage. Degraded results are empty rather than an error. */
+export interface TriageResult {
+  suggestions: {
+    category?: TriageSuggestion
+    priority?: TriageSuggestion
+  }
+  duplicates: TriageDuplicate[]
+  model: string
+  prompt_version: string
+  cached: boolean
+  degraded?: boolean
+}
+
+export type AISuggestionKind = 'category' | 'priority' | 'duplicate'
+
+export interface AICitation {
+  ticket_id: number
+  ticket_number: string
+}
+
+export interface AISuggestion {
+  id: number
+  job_id: number
+  ticket_id: number | null
+  kind: AISuggestionKind
+  value: string
+  confidence: number
+  rationale: string
+  citations?: AICitation[]
+  model: string
+  prompt_version: string
+  accepted_at: string | null
+  rejected_at: string | null
+  created_at: string
 }
