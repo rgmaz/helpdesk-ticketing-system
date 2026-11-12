@@ -27,9 +27,10 @@ import { useToast } from '../state/ToastContext'
  * One ticket, with its thread, its SLA clock and its immutable timeline.
  *
  * Status buttons are built from `available_transitions`, which the server
- * derives from the same transition table it enforces on write. That is the
- * point: the UI cannot offer an illegal move, and a rule change on the server
- * reaches this screen with no frontend change.
+ * derives from both the transition table and the signed-in role. That is the
+ * point: the UI cannot offer an illegal move or one the actor is not allowed to
+ * make, and a rule change on the server reaches this screen with no frontend
+ * change.
  */
 export function TicketPage() {
   const { ticketId } = useParams()

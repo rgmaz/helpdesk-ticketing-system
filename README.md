@@ -460,7 +460,9 @@ prevents is offering a page that could only ever 403.
 
 `GET /tickets/{id}` returns `available_transitions` and `can_delete`, so the UI
 renders exactly the actions that are legal rather than guessing and letting the
-server refuse.
+server refuse. `available_transitions` is filtered by role as well as by the
+state machine: a requester only ever sees the close and reopen moves they are
+allowed to make, while staff see the full set.
 
 The administrator pages are lazily loaded. The dashboard pulls in Recharts, which
 is larger than the rest of the app combined and only an administrator ever needs

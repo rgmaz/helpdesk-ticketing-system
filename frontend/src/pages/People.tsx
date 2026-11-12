@@ -159,7 +159,7 @@ export function PeoplePage() {
                       >
                         Edit
                       </button>{' '}
-                      {person.id !== me?.id && (
+                      {person.id !== me?.id && !person.is_last_admin && (
                         <button
                           type="button"
                           className="btn btn-sm"
@@ -217,6 +217,9 @@ function UserDialog({
   const toast = useToast()
   const creating = target === 'new'
   const existing = target === 'new' ? null : target
+  // The last active administrator cannot be demoted: the server refuses it to
+  // avoid locking everyone out of the admin surfaces.
+  const roleLocked = existing?.is_last_admin === true
 
   const [username, setUsername] = useState(() => existing?.username ?? '')
   const [fullName, setFullName] = useState(() => existing?.full_name ?? '')
@@ -330,14 +333,21 @@ function UserDialog({
           label="Role"
           htmlFor="u-role"
           hint={
-            role === 'technician'
-              ? 'Technicians are in the automatic routing pool.'
-              : role === 'admin'
-                ? 'Administrators manage people, policies and reporting, and are escalation targets rather than front-line handlers.'
-                : 'Requesters see and comment on their own tickets only.'
+            roleLocked
+              ? 'The last active administrator must stay an administrator.'
+              : role === 'technician'
+                ? 'Technicians are in the automatic routing pool.'
+                : role === 'admin'
+                  ? 'Administrators manage people, policies and reporting, and are escalation targets rather than front-line handlers.'
+                  : 'Requesters see and comment on their own tickets only.'
           }
         >
-          <select id="u-role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+          <select
+            id="u-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value as Role)}
+            disabled={roleLocked}
+          >
             <option value="user">Requester</option>
             <option value="technician">Technician</option>
             <option value="admin">Administrator</option>

@@ -21,6 +21,9 @@ type directoryRow struct {
 	ActiveTickets   int `json:"active_tickets"`
 	OverdueTickets  int `json:"overdue_tickets"`
 	ResolvedTickets int `json:"resolved_30d"`
+	// IsLastAdmin marks the only active administrator. The UI uses it to omit
+	// actions the server would refuse, such as deactivating the last admin.
+	IsLastAdmin bool `json:"is_last_admin"`
 }
 
 // handleListUsers returns the account directory.
@@ -61,6 +64,19 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Count active administrators once so each row can advertise whether it is
+	// the last one. The server refuses to demote or deactivate that account, so
+	// the directory hides those controls rather than offering an action that can
+	// only fail.
+	active := true
+	_, activeAdmins, err := s.store.Users.List(r.Context(), store.UserFilter{
+		Role: models.RoleAdmin, Active: &active, Limit: 1,
+	})
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+
 	byID := make(map[int64]models.TechnicianWorkload, len(workload))
 	for _, w := range workload {
 		byID[w.UserID] = w
@@ -74,6 +90,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			ActiveTickets:   w.ActiveTickets,
 			OverdueTickets:  w.OverdueTickets,
 			ResolvedTickets: w.Resolved30d,
+			IsLastAdmin:     u.Role == models.RoleAdmin && u.Active && activeAdmins <= 1,
 		})
 	}
 

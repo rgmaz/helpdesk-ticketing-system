@@ -212,6 +212,33 @@ type UpdateRequest struct {
 	ResolutionNotes *string
 }
 
+// CanTransition reports whether actor may move a ticket from one status to
+// another. The write path and the advertised transition list both use it, so
+// the UI can never be offered a move the server would refuse.
+//
+// Only staff may move a ticket into or out of resolution states; end users may
+// close their own ticket (confirming the fix) or reopen a closed one.
+func CanTransition(actor Actor, from, to models.TicketStatus) bool {
+	if !from.CanTransitionTo(to) {
+		return false
+	}
+	return actor.Role.IsStaff() || to == models.StatusClosed || to == models.StatusReopened
+}
+
+// AvailableTransitions lists the moves this actor may make from the given
+// status. It is consumed by the ticket detail endpoint so the response carries
+// exactly the buttons the actor is allowed to press.
+func (t *Tickets) AvailableTransitions(actor Actor, from models.TicketStatus) []models.TicketStatus {
+	all := from.NextStatuses()
+	out := make([]models.TicketStatus, 0, len(all))
+	for _, next := range all {
+		if CanTransition(actor, from, next) {
+			out = append(out, next)
+		}
+	}
+	return out
+}
+
 // Update applies a lifecycle transition or field change, enforcing role rules
 // and emitting the corresponding events and notifications.
 func (t *Tickets) Update(ctx context.Context, actor Actor, ticketID int64, req UpdateRequest) (models.Ticket, error) {
@@ -236,8 +263,9 @@ func (t *Tickets) Update(ctx context.Context, actor Actor, ticketID int64, req U
 		}
 		// Only staff may move a ticket into or out of resolution states; end
 		// users may close their own resolved ticket (confirming the fix) or
-		// reopen a closed one.
-		if !actor.Role.IsStaff() && next != models.StatusClosed && next != models.StatusReopened {
+		// reopen a closed one. CanTransition is the same rule the detail
+		// endpoint uses to build the advertised list.
+		if !CanTransition(actor, current.Status, next) {
 			return models.Ticket{}, fmt.Errorf("%w: only staff can set a ticket to %s", models.ErrForbidden, next)
 		}
 		if next == models.StatusClosed && !current.Status.CanTransitionTo(models.StatusClosed) {

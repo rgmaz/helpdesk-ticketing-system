@@ -33,6 +33,8 @@ export interface DirectoryUser extends User {
   active_tickets: number
   overdue_tickets: number
   resolved_30d: number
+  /** True for the only active administrator; the server refuses to demote them. */
+  is_last_admin: boolean
 }
 
 export interface LoginResponse {

@@ -401,7 +401,7 @@ func (s *Server) handleGetTicket(w http.ResponseWriter, r *http.Request) {
 			"resolution_breached": ticket.ResolutionBreached,
 			"escalation_level":    ticket.EscalationLevel,
 		},
-		"available_transitions": ticket.Status.NextStatuses(),
+		"available_transitions": s.tickets.AvailableTransitions(actor, ticket.Status),
 		"can_delete":            actor.Role.IsAdmin(),
 	}
 	if actor.Role.IsStaff() {

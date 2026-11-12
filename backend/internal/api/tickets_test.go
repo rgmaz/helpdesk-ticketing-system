@@ -1500,3 +1500,70 @@ func TestStatusLabelsAndTransitionsAreComplete(t *testing.T) {
 		seen[p.Rank()] = p
 	}
 }
+
+// TestTicketDetailAdvertisesOnlyPermittedTransitions is the regression guard for
+// requester-visible action buttons: the detail endpoint must not list a move the
+// write path would refuse.
+func TestTicketDetailAdvertisesOnlyPermittedTransitions(t *testing.T) {
+	h := newHarness(t)
+	_, tech, _, user, _ := h.seed()
+	userToken := h.tokenFor(user, models.RoleUser)
+	techToken := h.tokenFor(tech, models.RoleTechnician)
+
+	ticket := h.createTicketAs(user, "Cannot sign in to the portal", "access", models.PriorityMedium)
+
+	// A requester opening an open ticket may only close it.
+	res := h.do(http.MethodGet, "/api/v1/tickets/"+itoa(ticket.ID), userToken, nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("get ticket = %d, body = %s", res.Status, res.Raw)
+	}
+	advertised := transitionStrings(res.Body["available_transitions"])
+	if len(advertised) != 1 || advertised[0] != string(models.StatusClosed) {
+		t.Fatalf("requester transitions = %v, want [closed]", advertised)
+	}
+
+	// The staff-only move is gone from the list and still refused on write.
+	blocked := h.do(http.MethodPatch, "/api/v1/tickets/"+itoa(ticket.ID), userToken,
+		map[string]any{"status": string(models.StatusInProgress)})
+	if blocked.Status != http.StatusForbidden {
+		t.Fatalf("requester in_progress = %d, want 403; body = %s", blocked.Status, blocked.Raw)
+	}
+
+	// The one advertised move must work.
+	closed := h.do(http.MethodPatch, "/api/v1/tickets/"+itoa(ticket.ID), userToken,
+		map[string]any{"status": string(models.StatusClosed)})
+	if closed.Status != http.StatusOK {
+		t.Fatalf("requester close = %d, want 200; body = %s", closed.Status, closed.Raw)
+	}
+
+	// Staff still see the full state machine.
+	staffTicket := h.createTicketAs(user, "Printer reports offline", "hardware", models.PriorityMedium)
+	staffRes := h.do(http.MethodGet, "/api/v1/tickets/"+itoa(staffTicket.ID), techToken, nil)
+	if staffRes.Status != http.StatusOK {
+		t.Fatalf("staff get ticket = %d, body = %s", staffRes.Status, staffRes.Raw)
+	}
+	staffAdvertised := transitionStrings(staffRes.Body["available_transitions"])
+	want := []string{
+		string(models.StatusInProgress), string(models.StatusPending),
+		string(models.StatusResolved), string(models.StatusClosed),
+	}
+	if len(staffAdvertised) != len(want) {
+		t.Fatalf("staff transitions = %v, want %v", staffAdvertised, want)
+	}
+	for i, next := range want {
+		if staffAdvertised[i] != next {
+			t.Fatalf("staff transitions = %v, want %v", staffAdvertised, want)
+		}
+	}
+}
+
+func transitionStrings(raw any) []string {
+	list, _ := raw.([]any)
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
